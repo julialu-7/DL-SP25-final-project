@@ -1,7 +1,12 @@
 from dataset import create_wall_dataloader
 from evaluator import ProbingEvaluator
 import torch
-from models import JEPAWorldModel
+from models import (
+    JEPAWorldModel,
+    JEPAWorldModelV1,
+    JEPAWorldModelV2,
+    JEPAWorldModelV3,
+)
 
 
 def get_device():
@@ -15,8 +20,7 @@ def load_data(device):
     """
     Load training and validation dataloaders for probing.
     Returns:
-        probe_train_ds: DataLoader for training
-        probe_val_ds: dict with 'normal' and 'wall' validation loaders
+        probe_train_ds, probe_val_ds dict
     """
     data_path = "/scratch/DL25SP"
 
@@ -69,18 +73,26 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 
 if __name__ == "__main__":
     device = get_device()
-    # Load data first to inspect channel dimension
+    # Load data and detect channels
     probe_train_ds, probe_val_ds = load_data(device)
-
-    # Detect the number of input channels from a sample batch
     sample_batch = next(iter(probe_train_ds))
     input_channels = sample_batch.states.shape[2]
     print(f"Detected input channels: {input_channels}")
 
-    # Initialize JEPAWorldModel with correct channels
-    model = JEPAWorldModel(input_channels=input_channels).to(device)
+    # Define and run all model variants
+    MODEL_VARIANTS = [
+        ("BaseJEPA", JEPAWorldModel),
+        ("MomentumJEPA_V1", JEPAWorldModelV1),
+        ("VICRegJEPA_V2", JEPAWorldModelV2),
+        ("ResNetJEPA_V3", JEPAWorldModelV3),
+    ]
 
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total Trainable Parameters: {total_params:,}")
-
-    evaluate_model(device, model, probe_train_ds, probe_val_ds)
+    for name, cls in MODEL_VARIANTS:
+        print(f"\n=== Training & Evaluating {name} ===")
+        # Instantiate with correct input channels
+        model = cls(input_channels=input_channels).to(device)
+        # Count parameters
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"{name} | Trainable Params: {total_params:,}")
+        # Run probing pipeline
+        evaluate_model(device, model, probe_train_ds, probe_val_ds)
