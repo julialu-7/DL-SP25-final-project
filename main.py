@@ -83,8 +83,9 @@ if __name__ == "__main__":
     MODEL_VARIANTS = [
         #("BaseJEPA", JEPAWorldModel),
         #("MomentumJEPA_V1", JEPAWorldModelV1),
-        #("VICRegJEPA_V2", JEPAWorldModelV2),
+        ("VICRegJEPA_V2", JEPAWorldModelV2),
         ("ResNetJEPA_V3", JEPAWorldModelV3),
+        ("V4", JEPAWorldModelV4),
     ]
 
     for name, cls in MODEL_VARIANTS:
