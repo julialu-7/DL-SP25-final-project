@@ -8,6 +8,7 @@ from models import (
     JEPAWorldModelV3,
 )
 import glob
+import copy
 
 
 def get_device():
