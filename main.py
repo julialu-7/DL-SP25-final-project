@@ -7,7 +7,6 @@ from models import (
     JEPAWorldModelV2,
     JEPAWorldModelV3,
 )
-import glob
 
 
 def get_device():
@@ -45,10 +44,10 @@ def load_data(device):
         "normal": probe_val_normal_ds,
         "wall": probe_val_wall_ds,
     }
-
     return probe_train_ds, probe_val_ds
 
 
+# List of models to benchmark
 MODEL_VARIANTS = [
     ("BaseJEPA", JEPAWorldModel),
     ("MomentumJEPA_V1", JEPAWorldModelV1),
@@ -59,8 +58,14 @@ MODEL_VARIANTS = [
 
 def evaluate_model(device, model_cls, model_name, probe_train_ds, probe_val_ds):
     print(f"\n--- Evaluating {model_name} ---")
-    # Initialize model
-    model = model_cls().to(device)
+
+    # Detect input channel dimension from the dataset
+    sample_batch = next(iter(probe_train_ds))
+    input_channels = sample_batch.states.shape[2]
+    print(f"Detected input channels: {input_channels}")
+
+    # Instantiate model with correct input channels
+    model = model_cls(input_channels=input_channels).to(device)
 
     # Compute and print total trainable parameters
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
