@@ -6,6 +6,7 @@ from models import (
     JEPAWorldModelV1,
     JEPAWorldModelV2,
     JEPAWorldModelV3,
+    JEPAWorldModelV4
 )
 
 
