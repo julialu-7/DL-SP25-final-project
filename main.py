@@ -81,9 +81,9 @@ if __name__ == "__main__":
 
     # Define and run all model variants
     MODEL_VARIANTS = [
-        ("BaseJEPA", JEPAWorldModel),
-        ("MomentumJEPA_V1", JEPAWorldModelV1),
-        ("VICRegJEPA_V2", JEPAWorldModelV2),
+        #("BaseJEPA", JEPAWorldModel),
+        #("MomentumJEPA_V1", JEPAWorldModelV1),
+        #("VICRegJEPA_V2", JEPAWorldModelV2),
         ("ResNetJEPA_V3", JEPAWorldModelV3),
     ]
 
