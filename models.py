@@ -286,9 +286,10 @@ class Prober(torch.nn.Module):
 class DeepResBlock(nn.Module):
     def __init__(self, ch: int):
         super().__init__()
-        self.conv1 = nn.Conv2d(ch, ch*2, 3, 2, 1)
-        self.conv2 = nn.Conv2d(ch*2, ch, 3, 1, 1)
+        # Keep spatial dimensions; double channels then reduce back
+        self.conv1 = nn.Conv2d(ch, ch*2, 3, stride=1, padding=1)
         self.bn1 = nn.BatchNorm2d(ch*2)
+        self.conv2 = nn.Conv2d(ch*2, ch, 3, stride=1, padding=1)
         self.bn2 = nn.BatchNorm2d(ch)
     def forward(self, x):
         residual = x
@@ -309,9 +310,9 @@ class JEPAWorldModelV4(nn.Module):
         self.repr_dim = repr_dim
         self.action_dim = action_dim
         self.momentum = momentum
-        # Deep ResNet backbone
+        # Deep ResNet backbone: no spatial downsampling in DeepResBlocks
         self.encoder = nn.Sequential(
-            nn.Conv2d(input_channels, 64, 7, 2, 3), nn.BatchNorm2d(64), nn.ReLU(True),
+            nn.Conv2d(input_channels, 64, 7, stride=2, padding=3), nn.BatchNorm2d(64), nn.ReLU(True),
             DeepResBlock(64), DeepResBlock(64),
             nn.AdaptiveAvgPool2d((1,1)), nn.Flatten(), nn.Linear(64, repr_dim)
         )
@@ -319,7 +320,8 @@ class JEPAWorldModelV4(nn.Module):
         self.predictor = build_mlp([repr_dim + action_dim] + hidden_dims + [repr_dim])
         # Momentum target encoder
         self.target_encoder = copy.deepcopy(self.encoder)
-        for p in self.target_encoder.parameters(): p.requires_grad = False
+        for p in self.target_encoder.parameters():
+            p.requires_grad = False
 
     @torch.no_grad()
     def _momentum_update(self):
@@ -337,4 +339,3 @@ class JEPAWorldModelV4(nn.Module):
         if self.training:
             self._momentum_update()
         return torch.stack(preds, 1)
-
