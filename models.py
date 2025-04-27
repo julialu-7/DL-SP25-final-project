@@ -37,7 +37,7 @@ class JEPAWorldModel(nn.Module):
         )
         # predictor MLP
         self.predictor = build_mlp([repr_dim + action_dim] + hidden_dims + [repr_dim])
-        # optional target encoder
+        # optional target encoder (same as encoder) for possible BYOL-style
         if use_target_encoder:
             self.target_encoder = copy.deepcopy(self.encoder)
             for p in self.target_encoder.parameters():
@@ -46,20 +46,29 @@ class JEPAWorldModel(nn.Module):
             self.target_encoder = None
 
     def forward(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        # states: [B, T, C, H, W] but use only first frame
-        # actions: [B, T, action_dim]
-        # returns preds: [B, T+1, repr_dim]
-        B = states.size(0)
-        # encode initial frame
+        # initial embedding
         s = self.encoder(states[:, 0])  # [B, repr_dim]
         preds = [s]
-        # autoregressive unroll for each action step
+        # autoregressive unroll
         for t in range(actions.size(1)):
-            a = actions[:, t]
-            inp = torch.cat([s, a], dim=1)
+            inp = torch.cat([s, actions[:, t]], dim=1)
             s = self.predictor(inp)
             preds.append(s)
+        # return [B, T+1, D]
         return torch.stack(preds, dim=1)
+
+    def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        preds = self(states, actions)          # [B, T+1, D]
+        # only predict next T steps, skip initial
+        pred_future = preds[:, 1:, :]           # [B, T, D]
+        # get target embeddings for frames 1..T
+        B, T, C, H, W = states.shape
+        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
+        with torch.no_grad():
+            target_feats = self.encoder(frames)
+        target = target_feats.view(B, T, -1)     # [B, T, D]
+        loss = F.mse_loss(pred_future, target)
+        return loss
 
 
 class JEPAWorldModelV1(nn.Module):
@@ -75,16 +84,15 @@ class JEPAWorldModelV1(nn.Module):
         self.repr_dim = repr_dim
         self.action_dim = action_dim
         self.momentum = momentum
-        # encoder
+        # encoder and target
         self.encoder = nn.Sequential(
             nn.Conv2d(input_channels, 32, 3, 2, 1), nn.BatchNorm2d(32), nn.ReLU(True),
             nn.Conv2d(32, 64, 3, 2, 1), nn.BatchNorm2d(64), nn.ReLU(True),
             nn.AdaptiveAvgPool2d((1,1)), nn.Flatten(), nn.Linear(64, repr_dim), nn.ReLU(True)
         )
-        self.predictor = build_mlp([repr_dim + action_dim] + hidden_dims + [repr_dim])
         self.target_encoder = copy.deepcopy(self.encoder)
-        for p in self.target_encoder.parameters():
-            p.requires_grad = False
+        for p in self.target_encoder.parameters(): p.requires_grad = False
+        self.predictor = build_mlp([repr_dim + action_dim] + hidden_dims + [repr_dim])
 
     @torch.no_grad()
     def _momentum_update(self):
@@ -92,17 +100,26 @@ class JEPAWorldModelV1(nn.Module):
             k.data = self.momentum * k.data + (1 - self.momentum) * q.data
 
     def forward(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        # autoregressive forward using only first frame
         s = self.encoder(states[:, 0])
         preds = [s]
         for t in range(actions.size(1)):
-            a = actions[:, t]
-            inp = torch.cat([s, a], dim=1)
+            inp = torch.cat([s, actions[:, t]], dim=1)
             s = self.predictor(inp)
             preds.append(s)
         if self.training:
             self._momentum_update()
         return torch.stack(preds, dim=1)
+
+    def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        preds = self(states, actions)
+        pred_future = preds[:, 1:, :]
+        B, T, C, H, W = states.shape
+        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
+        with torch.no_grad():
+            target_feats = self.target_encoder(frames)
+        target = target_feats.view(B, T, -1)
+        loss = F.mse_loss(pred_future, target)
+        return loss
 
 
 class JEPAWorldModelV2(nn.Module):
@@ -125,20 +142,38 @@ class JEPAWorldModelV2(nn.Module):
             nn.Conv2d(64, 128, 3, 2, 1), nn.BatchNorm2d(128), nn.ReLU(True),
             nn.AdaptiveAvgPool2d((1,1)), nn.Flatten(), nn.Linear(128, repr_dim)
         )
-        self.target_encoder = copy.deepcopy(self.encoder)
-        for p in self.target_encoder.parameters():
-            p.requires_grad = False
         self.predictor = build_mlp([repr_dim + action_dim] + hidden_dims + [repr_dim])
+
+    def _vicreg_losses(self, z, z_target):
+        inv = F.mse_loss(z, z_target)
+        std_z = torch.sqrt(z.var(0) + 1e-4)
+        var = torch.mean(F.relu(1 - std_z))
+        z_norm = z - z.mean(0)
+        cov = (z_norm.T @ z_norm) / (z.shape[0] - 1)
+        off = cov.flatten()[1:].view(self.repr_dim - 1, self.repr_dim + 1)[:, :-1]
+        cov_loss = (off**2).sum() / self.repr_dim
+        return inv, var * self.var_weight, cov_loss * self.cov_weight
 
     def forward(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         s = self.encoder(states[:, 0])
         preds = [s]
         for t in range(actions.size(1)):
-            a = actions[:, t]
-            inp = torch.cat([s, a], dim=1)
+            inp = torch.cat([s, actions[:, t]], dim=1)
             s = self.predictor(inp)
             preds.append(s)
         return torch.stack(preds, dim=1)
+
+    def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        preds = self(states, actions)[:, 1:, :]
+        B, T, C, H, W = states.shape
+        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
+        with torch.no_grad():
+            zt = self.encoder(frames)
+        target = zt.view(B, T, -1)
+        flat_pred = preds.reshape(B * T, -1)
+        flat_tgt = target.reshape(B * T, -1)
+        inv, var, cov_loss = self._vicreg_losses(flat_pred, flat_tgt)
+        return inv + var + cov_loss
 
 
 class ResBlock(nn.Module):
@@ -185,11 +220,20 @@ class JEPAWorldModelV3(nn.Module):
         s = self.encoder(states[:, 0])
         preds = [s]
         for t in range(actions.size(1)):
-            a = actions[:, t]
-            inp = torch.cat([s, a], dim=1)
+            inp = torch.cat([s, actions[:, t]], dim=1)
             s = self.predictor(inp)
             preds.append(s)
         return torch.stack(preds, dim=1)
+
+    def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        preds = self(states, actions)[:, 1:, :]
+        B, T, C, H, W = states.shape
+        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
+        with torch.no_grad():
+            zt = self.encoder(frames)
+        target = zt.view(B, T, -1)
+        loss = F.mse_loss(preds, target)
+        return loss
 
 
 class DeepResBlock(nn.Module):
@@ -238,15 +282,28 @@ class JEPAWorldModelV4(nn.Module):
         s = self.encoder(states[:, 0])
         preds = [s]
         for t in range(actions.size(1)):
-            a = actions[:, t]
-            inp = torch.cat([s, a], dim=1)
+            inp = torch.cat([s, actions[:, t]], dim=1)
             s = self.predictor(inp)
             preds.append(s)
         if self.training:
             self._momentum_update()
         return torch.stack(preds, dim=1)
-    
-class Prober(torch.nn.Module):
+
+    def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        preds = self(states, actions)[:, 1:, :]
+        B, T, C, H, W = states.shape
+        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
+        with torch.no_grad():
+            zt = self.encoder(frames)
+        target = zt.view(B, T, -1)
+        loss = F.mse_loss(preds, target)
+        # momentum update for target encoder
+        if self.training:
+            self._momentum_update()
+        return loss
+
+
+class Prober(nn.Module):
     def __init__(
         self,
         embedding: int,
@@ -257,16 +314,14 @@ class Prober(torch.nn.Module):
         self.output_dim = np.prod(output_shape)
         self.output_shape = output_shape
         self.arch = arch
-
         arch_list = list(map(int, arch.split("-"))) if arch != "" else []
         f = [embedding] + arch_list + [self.output_dim]
         layers = []
         for i in range(len(f) - 2):
-            layers.append(torch.nn.Linear(f[i], f[i + 1]))
-            layers.append(torch.nn.ReLU(True))
-        layers.append(torch.nn.Linear(f[-2], f[-1]))
-        self.prober = torch.nn.Sequential(*layers)
+            layers.append(nn.Linear(f[i], f[i + 1]))
+            layers.append(nn.ReLU(True))
+        layers.append(nn.Linear(f[-2], f[-1]))
+        self.prober = nn.Sequential(*layers)
 
-    def forward(self, e):
-        output = self.prober(e)
-        return output
+    def forward(self, e: torch.Tensor) -> torch.Tensor:
+        return self.prober(e)
