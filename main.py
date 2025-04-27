@@ -27,7 +27,7 @@ def load_data(device):
         probe_train_ds: for prober training
         probe_val_ds: dict of validation sets
     """
-    data_path = "/scratch/DL25SP"
+    data_path = "/content/DL25SP"
 
     # JEPA representation training data (full trajectories)
     train_ds = create_wall_dataloader(
@@ -81,10 +81,10 @@ def train_jepa_model(
     for epoch in range(epochs):
         total_loss = 0.0
         for batch in tqdm(train_loader, desc=f"JEPA Train Epoch {epoch}"):
-            states = batch.states.to(device)      # [B, T, C, H, W]
-            actions = batch.actions.to(device)    # [B, T-1, action_dim]
+            states = batch.states.to(device) 
+            actions = batch.actions.to(device) 
 
-            preds = model(states=states, actions=actions)  # [B, T, D]
+            preds = model(states=states, actions=actions)
 
             # Compute target embeddings via frozen encoder
             B, T, C, H, W = states.shape
