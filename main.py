@@ -1,12 +1,14 @@
 from dataset import create_wall_dataloader
 from evaluator import ProbingEvaluator
 import torch
+import torch.nn.functional as F
+from tqdm.auto import tqdm
 from models import (
     JEPAWorldModel,
     JEPAWorldModelV1,
     JEPAWorldModelV2,
     JEPAWorldModelV3,
-    JEPAWorldModelV4
+    JEPAWorldModelV4,
 )
 
 
@@ -19,12 +21,23 @@ def get_device():
 
 def load_data(device):
     """
-    Load training and validation dataloaders for probing.
+    Load datasets for JEPA training and probing evaluation.
     Returns:
-        probe_train_ds, probe_val_ds dict
+        train_ds: for representation learning
+        probe_train_ds: for prober training
+        probe_val_ds: dict of validation sets
     """
     data_path = "/scratch/DL25SP"
 
+    # JEPA representation training data (full trajectories)
+    train_ds = create_wall_dataloader(
+        data_path=f"{data_path}/train",
+        probing=False,
+        device=device,
+        train=True,
+    )
+
+    # Probing training data (predictions)
     probe_train_ds = create_wall_dataloader(
         data_path=f"{data_path}/probe_normal/train",
         probing=True,
@@ -32,28 +45,76 @@ def load_data(device):
         train=True,
     )
 
+    # Probing validation sets
     probe_val_normal_ds = create_wall_dataloader(
         data_path=f"{data_path}/probe_normal/val",
         probing=True,
         device=device,
         train=False,
     )
-
     probe_val_wall_ds = create_wall_dataloader(
         data_path=f"{data_path}/probe_wall/val",
         probing=True,
         device=device,
         train=False,
     )
-
     probe_val_ds = {
         "normal": probe_val_normal_ds,
         "wall": probe_val_wall_ds,
     }
-    return probe_train_ds, probe_val_ds
+    return train_ds, probe_train_ds, probe_val_ds
 
 
-def evaluate_model(device, model, probe_train_ds, probe_val_ds):
+def train_jepa_model(
+    device,
+    model,
+    train_loader,
+    epochs: int = 10,
+    lr: float = 1e-3,
+):
+    """
+    Train the JEPA model to predict future embeddings by minimizing MSE to target encodings.
+    """
+    model.train()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    for epoch in range(epochs):
+        total_loss = 0.0
+        for batch in tqdm(train_loader, desc=f"JEPA Train Epoch {epoch}"):
+            states = batch.states.to(device)      # [B, T, C, H, W]
+            actions = batch.actions.to(device)    # [B, T-1, action_dim]
+
+            preds = model(states=states, actions=actions)  # [B, T, D]
+
+            # Compute target embeddings via frozen encoder
+            B, T, C, H, W = states.shape
+            flat = states.reshape(B * T, C, H, W)
+            if hasattr(model, "target_encoder") and model.target_encoder is not None:
+                with torch.no_grad():
+                    zt = model.target_encoder(flat)
+            else:
+                with torch.no_grad():
+                    zt = model.encoder(flat)
+            target_emb = zt.view(B, T, -1)
+
+            loss = F.mse_loss(preds, target_emb)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(train_loader)
+        print(f"Epoch {epoch} | JEPA train MSE: {avg_loss:.4f}")
+    model.eval()
+
+
+def evaluate_model(
+    device,
+    model,
+    probe_train_ds,
+    probe_val_ds,
+):
     """
     Train a prober on model predictions and evaluate on validation sets.
     """
@@ -74,27 +135,31 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 
 if __name__ == "__main__":
     device = get_device()
-    # Load data and detect channels
-    probe_train_ds, probe_val_ds = load_data(device)
-    sample_batch = next(iter(probe_train_ds))
+
+    # Load datasets
+    train_ds, probe_train_ds, probe_val_ds = load_data(device)
+
+    # Detect channel count
+    sample_batch = next(iter(train_ds if hasattr(train_ds, 'states') else probe_train_ds))
     input_channels = sample_batch.states.shape[2]
     print(f"Detected input channels: {input_channels}")
 
-    # Define and run all model variants
+    # Choose which models to benchmark
     MODEL_VARIANTS = [
-        #("BaseJEPA", JEPAWorldModel),
-        #("MomentumJEPA_V1", JEPAWorldModelV1),
+        ("BaseJEPA", JEPAWorldModel),
+        ("MomentumJEPA_V1", JEPAWorldModelV1),
         ("VICRegJEPA_V2", JEPAWorldModelV2),
         ("ResNetJEPA_V3", JEPAWorldModelV3),
         ("V4", JEPAWorldModelV4),
     ]
 
     for name, cls in MODEL_VARIANTS:
-        print(f"\n=== Training & Evaluating {name} ===")
-        # Instantiate with correct input channels
+        print(f"\n=== {name} ===")
         model = cls(input_channels=input_channels).to(device)
-        # Count parameters
         total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"{name} | Trainable Params: {total_params:,}")
-        # Run probing pipeline
+        print(f"{name} | Params: {total_params:,}")
+
+        # 1) Representation learning
+        train_jepa_model(device, model, train_ds, epochs=10, lr=1e-3)
+        # 2) Probing evaluation
         evaluate_model(device, model, probe_train_ds, probe_val_ds)
