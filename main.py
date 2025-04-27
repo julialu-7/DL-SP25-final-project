@@ -69,7 +69,7 @@ def train_jepa_model(
     device,
     model,
     train_loader,
-    epochs: int = 10,
+    epochs: int = 50,
     lr: float = 1e-3,
 ):
     """
@@ -146,11 +146,11 @@ if __name__ == "__main__":
 
     # Choose which models to benchmark
     MODEL_VARIANTS = [
-        ("BaseJEPA", JEPAWorldModel),
+        #("BaseJEPA", JEPAWorldModel),
         ("MomentumJEPA_V1", JEPAWorldModelV1),
-        ("VICRegJEPA_V2", JEPAWorldModelV2),
-        ("ResNetJEPA_V3", JEPAWorldModelV3),
-        ("V4", JEPAWorldModelV4),
+        #("VICRegJEPA_V2", JEPAWorldModelV2),
+        #("ResNetJEPA_V3", JEPAWorldModelV3),
+        #("V4", JEPAWorldModelV4),
     ]
 
     for name, cls in MODEL_VARIANTS:
