@@ -160,6 +160,6 @@ if __name__ == "__main__":
         print(f"{name} | Params: {total_params:,}")
 
         # 1) Representation learning
-        train_jepa_model(device, model, train_ds, epochs=10, lr=1e-3)
+        train_jepa_model(device, model, train_ds, epochs=50, lr=1e-3)
         # 2) Probing evaluation
         evaluate_model(device, model, probe_train_ds, probe_val_ds)
