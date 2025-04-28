@@ -231,12 +231,12 @@ class JEPAWorldModelV3(nn.Module):
     def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         preds = self(states, actions)[:, 1:, :]
         B, T, C, H, W = states.shape
-        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
-        with torch.no_grad():
-            zt = self.encoder(frames)
-        target = zt.view(B, T, -1)
+        frames = states[:, 1:, :, :, :].reshape(B * (T - 1), C, H, W)
+        with torch.no_grad(): target_feats = self.encoder(frames)
+        target = target_feats.view(B, T - 1, -1)
         loss = F.mse_loss(preds, target)
         return loss
+
 
 
 class DeepResBlock(nn.Module):
