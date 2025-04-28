@@ -58,17 +58,19 @@ class JEPAWorldModel(nn.Module):
         return torch.stack(preds, dim=1)
 
     def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        preds = self(states, actions)          # [B, T+1, D]
-        # only predict next T steps, skip initial
-        pred_future = preds[:, 1:, :]           # [B, T, D]
-        # get target embeddings for frames 1..T
+        # Forward to get embeddings [B, T, D]
+        preds = self(states, actions)
+        # Drop initial embedding, compare only future steps
+        pred_future = preds[:, 1:, :]  # [B, T-1, D]
         B, T, C, H, W = states.shape
-        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
+        # Flatten frames 1..T-1
+        frames = states[:, 1:, :, :, :].reshape(B * (T - 1), C, H, W)
         with torch.no_grad():
             target_feats = self.encoder(frames)
-        target = target_feats.view(B, T, -1)     # [B, T, D]
+        target = target_feats.view(B, T - 1, -1)  # [B, T-1, D]
         loss = F.mse_loss(pred_future, target)
         return loss
+
 
 
 class JEPAWorldModelV1(nn.Module):
@@ -112,13 +114,15 @@ class JEPAWorldModelV1(nn.Module):
 
     def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         preds = self(states, actions)
-        pred_future = preds[:, 1:, :]
+        pred_future = preds[:, 1:, :]  # [B, T-1, D]
         B, T, C, H, W = states.shape
-        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
+        frames = states[:, 1:, :, :, :].reshape(B * (T - 1), C, H, W)
         with torch.no_grad():
             target_feats = self.target_encoder(frames)
-        target = target_feats.view(B, T, -1)
+        target = target_feats.view(B, T - 1, -1)
         loss = F.mse_loss(pred_future, target)
+        if self.training:
+            self._momentum_update()
         return loss
 
 
@@ -164,17 +168,16 @@ class JEPAWorldModelV2(nn.Module):
         return torch.stack(preds, dim=1)
 
     def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        preds = self(states, actions)[:, 1:, :]
+        preds = self(states, actions)[:, 1:, :]  # [B, T-1, D]
         B, T, C, H, W = states.shape
-        frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
+        frames = states[:, 1:, :, :, :].reshape(B * (T - 1), C, H, W)
         with torch.no_grad():
             zt = self.encoder(frames)
-        target = zt.view(B, T, -1)
-        flat_pred = preds.reshape(B * T, -1)
-        flat_tgt = target.reshape(B * T, -1)
+        target = zt.view(B, T - 1, -1)
+        flat_pred = preds.reshape(B * (T - 1), -1)
+        flat_tgt = target.reshape(B * (T - 1), -1)
         inv, var, cov_loss = self._vicreg_losses(flat_pred, flat_tgt)
         return inv + var + cov_loss
-
 
 class ResBlock(nn.Module):
     def __init__(self, ch: int):
