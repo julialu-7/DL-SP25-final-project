@@ -149,7 +149,7 @@ if __name__ == "__main__":
         #("BaseJEPA", JEPAWorldModel),
         #("MomentumJEPA_V1", JEPAWorldModelV1),
         ("VICRegJEPA_V2", JEPAWorldModelV2),
-        ("ResNetJEPA_V3", JEPAWorldModelV3),
+        #("ResNetJEPA_V3", JEPAWorldModelV3),
         #("V4", JEPAWorldModelV4),
     ]
 
