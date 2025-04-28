@@ -58,13 +58,16 @@ class JEPAWorldModel(nn.Module):
         return torch.stack(preds, dim=1)
 
     def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        preds = self(states, actions)[:, 1:, :]  # [B, T, D]
+        preds = self(states, actions)          # [B, T+1, D]
+        # only predict next T steps, skip initial
+        pred_future = preds[:, 1:, :]           # [B, T, D]
+        # get target embeddings for frames 1..T
         B, T, C, H, W = states.shape
         frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
         with torch.no_grad():
             target_feats = self.encoder(frames)
-        target = target_feats.view(B, T, -1)
-        loss = F.mse_loss(preds, target)
+        target = target_feats.view(B, T, -1)     # [B, T, D]
+        loss = F.mse_loss(pred_future, target)
         return loss
 
 
@@ -108,16 +111,14 @@ class JEPAWorldModelV1(nn.Module):
         return torch.stack(preds, dim=1)
 
     def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        preds = self(states, actions)[:, 1:, :]
+        preds = self(states, actions)
+        pred_future = preds[:, 1:, :]
         B, T, C, H, W = states.shape
         frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
         with torch.no_grad():
             target_feats = self.target_encoder(frames)
         target = target_feats.view(B, T, -1)
-        loss = F.mse_loss(preds, target)
-        # update momentum after computing loss
-        if self.training:
-            self._momentum_update()
+        loss = F.mse_loss(pred_future, target)
         return loss
 
 
@@ -229,8 +230,8 @@ class JEPAWorldModelV3(nn.Module):
         B, T, C, H, W = states.shape
         frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
         with torch.no_grad():
-            target_feats = self.encoder(frames)
-        target = target_feats.view(B, T, -1)
+            zt = self.encoder(frames)
+        target = zt.view(B, T, -1)
         loss = F.mse_loss(preds, target)
         return loss
 
@@ -293,10 +294,10 @@ class JEPAWorldModelV4(nn.Module):
         B, T, C, H, W = states.shape
         frames = states[:, 1:, :, :, :].reshape(B * T, C, H, W)
         with torch.no_grad():
-            target_feats = self.encoder(frames)
-        target = target_feats.view(B, T, -1)
+            zt = self.encoder(frames)
+        target = zt.view(B, T, -1)
         loss = F.mse_loss(preds, target)
-        # update momentum after computing loss
+        # momentum update for target encoder
         if self.training:
             self._momentum_update()
         return loss
