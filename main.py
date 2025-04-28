@@ -97,7 +97,7 @@ def train_jepa_model(
                     zt = model.encoder(flat)
             target_emb = zt.view(B, T, -1)
 
-            loss = F.mse_loss(preds, target_emb)
+            loss = model.compute_jepa_loss(states, actions)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
