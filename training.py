@@ -18,10 +18,9 @@ def train_model(device, model, train_loader, lr: float, epochs: int):
     for epoch in range(1, epochs + 1):
         model.train()
         total_loss = 0.0
-        for states, actions in train_loader:
-            states = states.to(device)
-            actions = actions.to(device)
-
+        for batch in tqdm(train_loader, desc=f"JEPA Train Epoch {epoch}"):
+            states = batch.states.to(device) 
+            actions = batch.actions.to(device) 
             preds = model(states, actions)
             # Compute target embeddings via encoder
             B, T1, C, H, W = states.shape
