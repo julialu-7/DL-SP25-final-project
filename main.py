@@ -10,6 +10,7 @@ from models import (
     JEPAWorldModelV3,
     JEPAWorldModelV4,
 )
+from training import train_model
 
 
 def get_device():
@@ -17,7 +18,6 @@ def get_device():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
     return device
-
 
 def load_data(device):
     """
@@ -65,6 +65,27 @@ def load_data(device):
     return train_ds, probe_train_ds, probe_val_ds
 
 
+def load_model(device):
+    # Hyperparameters
+    input_channels = 1   # adjust if your data has more channels
+    height = 64          # adjust to your state height
+    width = 64           # adjust to your state width
+    action_dim = 2
+    repr_dim = 256
+    hidden_size = 512
+
+    model = JEPAWorldModel(
+        input_channels=input_channels,
+        height=height,
+        width=width,
+        action_dim=action_dim,
+        repr_dim=repr_dim,
+        hidden_size=hidden_size,
+    )
+    return model.to(device)
+
+
+'''
 def train_jepa_model(
     device,
     model,
@@ -107,7 +128,7 @@ def train_jepa_model(
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch {epoch} | JEPA train MSE: {avg_loss:.4f}")
     model.eval()
-
+''''
 
 def evaluate_model(
     device,
@@ -135,9 +156,16 @@ def evaluate_model(
 
 if __name__ == "__main__":
     device = get_device()
-
-    # Load datasets
     train_ds, probe_train_ds, probe_val_ds = load_data(device)
+    model = load_model(device)
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total Trainable Parameters: {total_params:,}")
+    
+    train_model(device, model, train_ds, lr=1e-3, epochs=100)
+    
+    evaluate_model(device, model, probe_train_ds, probe_val_ds)
+    
+    '''
 
     # Detect channel count
     sample_batch = next(iter(train_ds if hasattr(train_ds, 'states') else probe_train_ds))
@@ -146,10 +174,10 @@ if __name__ == "__main__":
 
     # Choose which models to benchmark
     MODEL_VARIANTS = [
-        #("BaseJEPA", JEPAWorldModel),
-        ("MomentumJEPA_V1", JEPAWorldModelV1),
+        ("RNN_JEPA", JEPAWorldModel),
+        #("MomentumJEPA_V1", JEPAWorldModelV1),
         #("VICRegJEPA_V2", JEPAWorldModelV2),
-        ("ResNetJEPA_V3", JEPAWorldModelV3),
+        #("ResNetJEPA_V3", JEPAWorldModelV3),
         #("V4", JEPAWorldModelV4),
     ]
 
@@ -163,3 +191,4 @@ if __name__ == "__main__":
         train_jepa_model(device, model, train_ds, epochs=500, lr=1e-3)
         # 2) Probing evaluation
         evaluate_model(device, model, probe_train_ds, probe_val_ds)
+        '''

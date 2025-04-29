@@ -19,58 +19,53 @@ def build_mlp(layers_dims: List[int]):
 class JEPAWorldModel(nn.Module):
     def __init__(
         self,
-        input_channels: int = 1,
-        repr_dim: int = 256,
+        input_channels: int,
+        height: int,
+        width: int,
         action_dim: int = 2,
-        hidden_dims: List[int] = [256],
-        use_target_encoder: bool = True,
+        repr_dim: int = 256,
+        hidden_size: int = 512,
+        num_layers: int = 1,
     ):
         super().__init__()
         self.repr_dim = repr_dim
-        self.action_dim = action_dim
-        # encoder
-        self.encoder = nn.Sequential(
-            nn.Conv2d(input_channels, 32, 3, 2, 1), nn.BatchNorm2d(32), nn.ReLU(True),
-            nn.Conv2d(32, 64, 3, 2, 1), nn.BatchNorm2d(64), nn.ReLU(True),
-            nn.Conv2d(64, 128, 3, 2, 1), nn.BatchNorm2d(128), nn.ReLU(True),
-            nn.AdaptiveAvgPool2d((1,1)), nn.Flatten(), nn.Linear(128, repr_dim), nn.ReLU(True)
+        self.input_dim = input_channels * height * width
+
+        # Embed raw states to a compact representation
+        self.embed = build_mlp([self.input_dim, 512, repr_dim])
+
+        # RNN to capture temporal dynamics
+        self.rnn = nn.LSTM(
+            input_size=repr_dim + action_dim,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
         )
-        # predictor MLP
-        self.predictor = build_mlp([repr_dim + action_dim] + hidden_dims + [repr_dim])
-        # optional target encoder (same as encoder) for possible BYOL-style
-        if use_target_encoder:
-            self.target_encoder = copy.deepcopy(self.encoder)
-            for p in self.target_encoder.parameters():
-                p.requires_grad = False
-        else:
-            self.target_encoder = None
+
+        # Spatial predictor: from hidden state to next-step representation
+        self.predictor = nn.Linear(hidden_size, repr_dim)
 
     def forward(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        # initial embedding
-        s = self.encoder(states[:, 0])  # [B, repr_dim]
-        preds = [s]
-        # autoregressive unroll
-        for t in range(actions.size(1)):
-            inp = torch.cat([s, actions[:, t]], dim=1)
-            s = self.predictor(inp)
-            preds.append(s)
-        # return [B, T+1, D]
-        return torch.stack(preds, dim=1)
+        B, T1, C, H, W = states.shape
+        T = T1 - 1
 
-    def compute_jepa_loss(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        # Forward to get embeddings [B, T, D]
-        preds = self(states, actions)
-        # Drop initial embedding, compare only future steps
-        pred_future = preds[:, 1:, :]  # [B, T-1, D]
-        B, T, C, H, W = states.shape
-        # Flatten frames 1..T-1
-        frames = states[:, 1:, :, :, :].reshape(B * (T - 1), C, H, W)
-        with torch.no_grad():
-            target_feats = self.encoder(frames)
-        target = target_feats.view(B, T - 1, -1)  # [B, T-1, D]
-        loss = F.mse_loss(pred_future, target)
-        return loss
+        # Flatten and embed all states: [B*(T+1), input_dim]
+        flat_states = states.view(B * T1, -1)
+        embeds = self.embed(flat_states)  # [B*(T+1), repr_dim]
+        embeds = embeds.view(B, T1, self.repr_dim)  # [B, T+1, repr_dim]
 
+        # Prepare RNN inputs: concat embed_t and action_t for t=0..T-1
+        rnn_in = torch.cat([embeds[:, :-1, :], actions], dim=-1)  # [B, T, repr+action]
+
+        # Run through LSTM
+        rnn_out, _ = self.rnn(rnn_in)  # [B, T, hidden]
+
+        # Predict next-step embeddings
+        preds_step = self.predictor(rnn_out)  # [B, T, repr_dim]
+
+        # Include the initial embedding to align dimensions: [B,1,repr] + [B,T,repr]
+        preds_full = torch.cat([embeds[:, :1, :], preds_step], dim=1)  # [B, T+1, repr_dim]
+        return preds_full
 
 
 class JEPAWorldModelV1(nn.Module):
