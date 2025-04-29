@@ -128,7 +128,7 @@ def train_jepa_model(
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch {epoch} | JEPA train MSE: {avg_loss:.4f}")
     model.eval()
-''''
+'''
 
 def evaluate_model(
     device,
