@@ -17,6 +17,17 @@ def build_mlp(layers_dims: List[int]):
 
 
 class JEPAWorldModel(nn.Module):
+    """
+    Joint Embedding Prediction Architecture (JEPA) world model.
+    Uses an MLP embedder, an RNN for temporal dynamics, and a linear spatial predictor.
+    Supports both training (teacher-forced) and inference modes.
+
+    Input:
+        states: [B, T+1, C, H, W] (T+1 > 1 for training, T+1 == 1 for inference)
+        actions: [B, T, action_dim]
+    Output:
+        preds_full: [B, T+1, repr_dim]
+    """
     def __init__(
         self,
         input_channels: int,
@@ -30,6 +41,7 @@ class JEPAWorldModel(nn.Module):
         super().__init__()
         self.repr_dim = repr_dim
         self.input_dim = input_channels * height * width
+        self.action_dim = action_dim
 
         # Embed raw states to a compact representation
         self.embed = build_mlp([self.input_dim, 512, repr_dim])
@@ -47,25 +59,40 @@ class JEPAWorldModel(nn.Module):
 
     def forward(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         B, T1, C, H, W = states.shape
-        T = T1 - 1
+        # Flatten states batch+time for embedding
+        if T1 == 1:
+            # Inference mode: only initial state provided
+            # Embed initial state
+            flat_init = states.view(B, -1)
+            embed_init = self.embed(flat_init)  # [B, repr_dim]
+            embed_init = embed_init.view(B, 1, self.repr_dim)  # [B, 1, repr_dim]
 
-        # Flatten and embed all states: [B*(T+1), input_dim]
-        flat_states = states.view(B * T1, -1)
-        embeds = self.embed(flat_states)  # [B*(T+1), repr_dim]
-        embeds = embeds.view(B, T1, self.repr_dim)  # [B, T+1, repr_dim]
+            # Prepare repeated features for RNN input
+            T = actions.shape[1]
+            # Repeat initial embedding for each action timestep
+            embed_repeat = embed_init.repeat(1, T, 1)  # [B, T, repr_dim]
+            rnn_in = torch.cat([embed_repeat, actions], dim=-1)  # [B, T, repr+action]
 
-        # Prepare RNN inputs: concat embed_t and action_t for t=0..T-1
-        rnn_in = torch.cat([embeds[:, :-1, :], actions], dim=-1)  # [B, T, repr+action]
+            # RNN forward
+            rnn_out, _ = self.rnn(rnn_in)  # [B, T, hidden]
+            preds_step = self.predictor(rnn_out)  # [B, T, repr_dim]
 
-        # Run through LSTM
-        rnn_out, _ = self.rnn(rnn_in)  # [B, T, hidden]
+            # Concatenate initial embedding with predictions
+            preds_full = torch.cat([embed_init, preds_step], dim=1)  # [B, T+1, repr_dim]
+            return preds_full
+        else:
+            # Training mode: full states sequence available
+            flat_states = states.view(B * T1, -1)
+            embeds = self.embed(flat_states).view(B, T1, self.repr_dim)  # [B, T+1, repr_dim]
 
-        # Predict next-step embeddings
-        preds_step = self.predictor(rnn_out)  # [B, T, repr_dim]
+            # Teacher-forced RNN input: use true embeddings
+            rnn_in = torch.cat([embeds[:, :-1, :], actions], dim=-1)  # [B, T, repr+action]
+            rnn_out, _ = self.rnn(rnn_in)  # [B, T, hidden]
+            preds_step = self.predictor(rnn_out)  # [B, T, repr_dim]
 
-        # Include the initial embedding to align dimensions: [B,1,repr] + [B,T,repr]
-        preds_full = torch.cat([embeds[:, :1, :], preds_step], dim=1)  # [B, T+1, repr_dim]
-        return preds_full
+            # Prepend initial embedding
+            preds_full = torch.cat([embeds[:, :1, :], preds_step], dim=1)  # [B, T+1, repr_dim]
+            return preds_full
 
 
 class JEPAWorldModelV1(nn.Module):
