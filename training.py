@@ -1,3 +1,6 @@
+import torch
+from torch import nn
+
 def train_model(device, model, train_loader, lr: float, epochs: int):
     """
     Train JEPAWorldModel using only the training data loader.
