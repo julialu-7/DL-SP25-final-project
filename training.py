@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from tqdm.auto import tqdm
 
 def train_model(device, model, train_loader, lr: float, epochs: int):
     """
