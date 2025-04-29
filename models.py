@@ -36,7 +36,7 @@ class JEPAWorldModel(nn.Module):
         action_dim: int = 2,
         repr_dim: int = 256,
         hidden_size: int = 512,
-        num_layers: int = 1,
+        num_layers: int = 3,
     ):
         super().__init__()
         self.repr_dim = repr_dim
