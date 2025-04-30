@@ -27,7 +27,8 @@ def load_data(device):
         probe_train_ds: for prober training
         probe_val_ds: dict of validation sets
     """
-    data_path = "/content/drive/My Drive/DL25SP"
+    # data_path = "/content/drive/My Drive/DL25SP"
+    data_path = "/scratch/DL25SP"
 
     # JEPA representation training data (full trajectories)
     train_ds = create_wall_dataloader(
